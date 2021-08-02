@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Accord.Bot.Helpers;
+using Accord.Bot.Models;
 using Accord.Services.Xp;
 using MediatR;
 using Remora.Commands.Attributes;
@@ -27,7 +28,7 @@ namespace Accord.Bot.CommandGroups
         }
 
         [Command("leaderboard"), Description("Get a leaderboard of XP")]
-        public async Task<IResult> GetLeaderboard()
+        public async Task<Result<IUserMessage>> GetLeaderboard()
         {
             var leaderboard = await _mediator.Send(new GetLeaderboardRequest());
 
@@ -40,19 +41,15 @@ namespace Accord.Bot.CommandGroups
 
             var embed = new Embed(Title: "Leaderboard", Description: leaderboardPayload, Footer: new EmbedFooter("See individual statistics via the /profile command"));
 
-            await _commandResponder.Respond(embed);
-
-            return Result.FromSuccess();
+            return new EmbedMessage(embed);
         }
 
         [RequireUserGuildPermission(DiscordPermission.Administrator), Command("calculate-xp"), Description("Calculate XP, long running")]
-        public async Task<IResult> CalculateXp()
+        public async Task<Result<IUserMessage>> CalculateXp()
         {
             await _mediator.Send(new CalculateParticipationRequest());
 
-            await _commandResponder.Respond("Calculated!");
-
-            return Result.FromSuccess();
+            return new InfoMessage("Calculated!");
         }
     }
 }

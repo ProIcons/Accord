@@ -2,6 +2,7 @@
 using System.Linq;
 using System.Threading.Tasks;
 using Accord.Bot.Helpers;
+using Accord.Bot.Models;
 using Remora.Commands.Attributes;
 using Remora.Discord.API.Abstractions.Rest;
 using Remora.Discord.Commands.Contexts;
@@ -26,7 +27,7 @@ namespace Accord.Bot.CommandGroups
         }
 
         [Command("subscribe"), Description("Subscribe to LGTM role")]
-        public async Task<IResult> Subscribe()
+        public async Task<Result<IUserMessage>> Subscribe()
         {
             var roles = await _guildApi.GetGuildRolesAsync(_commandContext.GuildID.Value);
             
@@ -35,12 +36,12 @@ namespace Accord.Bot.CommandGroups
                 var role = roles.Entity.Single(x => x.Name == ROLE_NAME);
                 await _guildApi.AddGuildMemberRoleAsync(_commandContext.GuildID.Value, _commandContext.User.ID, role.ID);
             }
-            
-            return await _commandResponder.Respond("Subscribed!");
+
+            return new InfoMessage("Subscribed!");
         }
 
         [Command("unsubscribe"), Description("Unsubscribe from LGTM role")]
-        public async Task<IResult> Unsubscribe()
+        public async Task<Result<IUserMessage>> Unsubscribe()
         {
             var roles = await _guildApi.GetGuildRolesAsync(_commandContext.GuildID.Value);
             
@@ -50,7 +51,7 @@ namespace Accord.Bot.CommandGroups
                 await _guildApi.RemoveGuildMemberRoleAsync(_commandContext.GuildID.Value, _commandContext.User.ID, role.ID);
             }
             
-            return await _commandResponder.Respond("Unsubscribed!");
+            return new InfoMessage("Unsubscribed!");
         }
     }
 }

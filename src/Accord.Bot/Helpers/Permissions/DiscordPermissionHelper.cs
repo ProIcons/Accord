@@ -118,7 +118,7 @@ namespace Accord.Bot.Helpers.Permissions
         {
             var effectivePermissions = GetUserEffectivePermissionsInChannel(discordGuildId, guildMember, discordChannel);
             
-            return permissions.Select(x => effectivePermissions.HasPermission(x)).All(x => x);
+            return permissions.Select(x => effectivePermissions?.HasPermission(x)).All(x => x ?? false);
         }
 
         public async Task<bool> HasUserEffectivePermissionsInChannel(ulong discordGuildId, ulong discordUserId, ulong discordChannelId, params DiscordPermission[] permissions)
@@ -130,11 +130,14 @@ namespace Accord.Bot.Helpers.Permissions
             return permissions.Select(x => effectivePermissions.HasPermission(x)).All(x => x);
         }
 
-        public IDiscordPermissionSet GetUserEffectivePermissionsInChannel(ulong discordGuildId, IGuildMember guildMember, IChannel discordChannel)
+        public IDiscordPermissionSet? GetUserEffectivePermissionsInChannel(ulong discordGuildId, IGuildMember guildMember, IChannel discordChannel)
         {
             var guildEveryoneRole = _discordCache.GetEveryoneRole(discordGuildId);
             var guildRoles = _discordCache.GetGuildRoles(discordGuildId);
             var memberRoles = guildRoles.Where(x => guildMember.Roles.Contains(x.ID)).ToList();
+            if (!discordChannel.PermissionOverwrites.HasValue)
+                return null;
+            
             var channelPermissionOverwrites = discordChannel.PermissionOverwrites.Value;
 
             return DiscordPermissionSet.ComputePermissions(guildMember.User.Value!.ID, guildEveryoneRole, memberRoles, channelPermissionOverwrites);

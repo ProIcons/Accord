@@ -18,40 +18,48 @@ namespace Accord.Bot.Services
     public class UserFeedbackService
     {
         private readonly ContextInjectionService _contextInjection;
-        private readonly IDiscordRestChannelAPI _channelAPI;
-        private readonly IDiscordRestUserAPI _userAPI;
-        private readonly IDiscordRestWebhookAPI _webhookAPI;
+        private readonly IDiscordRestChannelAPI _channelApi;
+        private readonly IDiscordRestWebhookAPI _webhookApi;
 
         public bool HasEditedOriginalInteraction { get; private set; }
 
         public UserFeedbackService(ContextInjectionService contextInjection, IDiscordRestChannelAPI channelApi, IDiscordRestUserAPI userApi, IDiscordRestWebhookAPI webhookApi)
         {
             _contextInjection = contextInjection;
-            _channelAPI = channelApi;
-            _userAPI = userApi;
-            _webhookAPI = webhookApi;
+            _channelApi = channelApi;
+            _webhookApi = webhookApi;
         }
+
 
         public Task<Result<IReadOnlyList<IMessage>>> RespondAsync(IUserMessage message, CancellationToken ctx = default) => message switch
         {
             EmbedMessage embedMessage => RespondEmbedAsync(embedMessage, ctx),
             TextMessage textMessage => RespondTextAsync(textMessage, ctx),
+            StateMessage stateMessage => RespondStateAsync(stateMessage, ctx),
             _ => throw new ArgumentOutOfRangeException(nameof(message), $"Message should be either of type '{nameof(EmbedMessage)}' or '{nameof(TextMessage)}'")
         };
 
-        public async Task<Result<IReadOnlyList<IMessage>>> RespondEmbedAsync(EmbedMessage message, CancellationToken ctx = default)
+        public async Task<Result<IReadOnlyList<IMessage>>> RespondEmbedAsync(EmbedMessage message, CancellationToken ctx = default) =>
+            await RespondEmbedAsync(EmbedGroupMessage.ToGroupMessage(message), ctx);
+
+        public async Task<Result<IReadOnlyList<IMessage>>> RespondEmbedAsync(EmbedGroupMessage message, CancellationToken ctx = default)
         {
-            IEmbed a;
-            a.
+            var result = await SendContextualEmbedAsync(message, ctx);
+
+            return !result.IsSuccess
+                ? Result<IReadOnlyList<IMessage>>.FromError(result)
+                : Result<IReadOnlyList<IMessage>>.FromSuccess(new List<IMessage> { result.Entity });
         }
 
         public async Task<Result<IReadOnlyList<IMessage>>> RespondTextAsync(TextMessage message, CancellationToken ctx = default)
         {
             var sendResults = new List<IMessage>();
 
-            foreach (var chunk in CreateTextContentChunks(message))
+            foreach (var chunk in CreateTextContentChunks(message.Content))
             {
-                var send = await SendContextualTextAsync(chunk, ctx);
+                var send = await SendContextualTextAsync(chunk.IsLast
+                    ? message with { Content = chunk.Content }
+                    : new TextMessage(chunk.Content), ctx);
                 if (!send.IsSuccess)
                 {
                     return Result<IReadOnlyList<IMessage>>.FromError(send);
@@ -63,8 +71,74 @@ namespace Accord.Bot.Services
             return sendResults;
         }
 
+        public async Task<Result<IReadOnlyList<IMessage>>> RespondStateAsync(StateMessage message, CancellationToken ctx = default)
+        {
+            var embedGroupMessage = new EmbedGroupMessage(
+                CreateTextContentChunks(message.Content).Select(x => (IEmbed)new Embed { Description = x.Content, Colour = message.Color }).ToList(),
+                message.MessageComponents,
+                message.AllowedMentions
+            );
 
-        public async Task<Result<IMessage>> SendContextualEmbedAsync(List<EmbedMessage> embedMessage, CancellationToken ctx = default)
+            var result = await SendContextualEmbedAsync(embedGroupMessage, ctx);
+
+            return !result.IsSuccess
+                ? Result<IReadOnlyList<IMessage>>.FromError(result)
+                : Result<IReadOnlyList<IMessage>>.FromSuccess(new List<IMessage> { result.Entity });
+        }
+
+        public Task<Result<IMessage>> SendEmbedAsync(
+            Snowflake channel,
+            Embed embed,
+            MessageReference? messageReference = default,
+            AllowedMentions? allowedMentions = default,
+            List<IMessageComponent>? messageComponents = default,
+            FileData? fileData = default,
+            CancellationToken ct = default
+        ) => SendEmbedsAsync(channel, new List<Embed> { embed }, messageReference, allowedMentions, messageComponents, fileData, ct);
+
+        public Task<Result<IMessage>> SendEmbedsAsync(
+            Snowflake channel,
+            List<Embed> embeds,
+            MessageReference? messageReference = default,
+            AllowedMentions? allowedMentions = default,
+            List<IMessageComponent>? messageComponents = default,
+            FileData? fileData = default,
+            CancellationToken ct = default
+        )
+        {
+            return _channelApi.CreateMessageAsync(
+                channel,
+                embeds: embeds,
+                messageReference: messageReference ?? new Optional<IMessageReference>(),
+                allowedMentions: allowedMentions ?? new Optional<IAllowedMentions>(),
+                components: messageComponents ?? new Optional<IReadOnlyList<IMessageComponent>>(),
+                file: fileData ?? new Optional<FileData>(),
+                ct: ct
+            );
+        }
+
+        public Task<Result<IMessage>> SendMessageAsync(
+            Snowflake channel,
+            string content,
+            MessageReference? messageReference = default,
+            AllowedMentions? allowedMentions = default,
+            List<IMessageComponent>? messageComponents = default,
+            FileData? fileData = default,
+            CancellationToken ct = default
+        )
+        {
+            return _channelApi.CreateMessageAsync(
+                channel,
+                content,
+                messageReference: messageReference ?? new Optional<IMessageReference>(),
+                allowedMentions: allowedMentions ?? new Optional<IAllowedMentions>(),
+                components: messageComponents ?? new Optional<IReadOnlyList<IMessageComponent>>(),
+                file: fileData ?? new Optional<FileData>(),
+                ct: ct
+            );
+        }
+
+        public async Task<Result<IMessage>> SendContextualEmbedAsync(EmbedGroupMessage embedMessage, CancellationToken ctx = default)
         {
             if (_contextInjection.Context is null)
             {
@@ -74,13 +148,11 @@ namespace Accord.Bot.Services
             switch (_contextInjection.Context)
             {
                 case MessageContext messageContext:
-                    return await _channelAPI.CreateMessageAsync
+                    return await _channelApi.CreateMessageAsync
                     (
                         messageContext.ChannelID,
-                        embeds: embedMessage.Select(x => x.Embed).ToArray(),
+                        embeds: embedMessage.Embeds,
                         allowedMentions: embedMessage.AllowedMentions ?? new AllowedMentions(new List<MentionType>(), new List<Snowflake>(), new List<Snowflake>()),
-                        file: embedMessage.FileData ?? new Optional<FileData>(),
-                        messageReference: embedMessage.MessageReference ?? new Optional<IMessageReference>(),
                         components: embedMessage.MessageComponents ?? new Optional<IReadOnlyList<IMessageComponent>>(),
                         ct: ctx
                     );
@@ -88,41 +160,22 @@ namespace Accord.Bot.Services
                     {
                         if (this.HasEditedOriginalInteraction)
                         {
-                            if (embedMessage.MessageReference != null)
-                            {
-                                return await _channelAPI.CreateMessageAsync
-                                (
-                                    interactionContext.ChannelID,
-                                    embedMessage.Content,
-                                    allowedMentions: embedMessage.AllowedMentions ?? new AllowedMentions(new List<MentionType>(), new List<Snowflake>(), new List<Snowflake>()),
-                                    file: embedMessage.FileData ?? new Optional<FileData>(),
-                                    messageReference: embedMessage.MessageReference ?? new Optional<IMessageReference>(),
-                                    components: embedMessage.MessageComponents ?? new Optional<IReadOnlyList<IMessageComponent>>(),
-                                    ct: ctx
-                                );
-                            }
-                            return await _webhookAPI.CreateFollowupMessageAsync
+                            return await _webhookApi.CreateFollowupMessageAsync
                             (
                                 interactionContext.ApplicationID,
                                 interactionContext.Token,
-                                embedMessage.Content,
+                                embeds: embedMessage.Embeds,
                                 allowedMentions: embedMessage.AllowedMentions ?? new AllowedMentions(new List<MentionType>(), new List<Snowflake>(), new List<Snowflake>()),
-                                file: embedMessage.FileData ?? new Optional<FileData>(),
                                 components: embedMessage.MessageComponents ?? new Optional<IReadOnlyList<IMessageComponent>>(),
                                 ct: ctx
                             );
                         }
 
-                        if (embedMessage.MessageReference != null || embedMessage.FileData != null)
-                        {
-                            throw new InvalidOperationException(
-                                $"{nameof(embedMessage.MessageReference)} and {nameof(embedMessage.FileData)} cannot be defined on the original interaction response");
-                        }
-                        var edit = await _webhookAPI.EditOriginalInteractionResponseAsync
+                        var edit = await _webhookApi.EditOriginalInteractionResponseAsync
                         (
                             interactionContext.ApplicationID,
                             interactionContext.Token,
-                            embedMessage.Content,
+                            embeds: embedMessage.Embeds,
                             allowedMentions: embedMessage.AllowedMentions ?? new AllowedMentions(new List<MentionType>(), new List<Snowflake>(), new List<Snowflake>()),
                             components: embedMessage.MessageComponents ?? new Optional<IReadOnlyList<IMessageComponent>>(),
                             ct: ctx
@@ -152,51 +205,29 @@ namespace Accord.Bot.Services
             switch (_contextInjection.Context)
             {
                 case MessageContext messageContext:
-                    return await _channelAPI.CreateMessageAsync
+                    return await _channelApi.CreateMessageAsync
                     (
                         messageContext.ChannelID,
                         textMessage.Content,
                         allowedMentions: textMessage.AllowedMentions ?? new AllowedMentions(new List<MentionType>(), new List<Snowflake>(), new List<Snowflake>()),
-                        file: textMessage.FileData ?? new Optional<FileData>(),
-                        messageReference: textMessage.MessageReference ?? new Optional<IMessageReference>(),
-                        components: textMessage.MessageComponents ?? new Optional<IReadOnlyList<IMessageComponent>>(),
                         ct: ctx
                     );
                 case InteractionContext interactionContext:
                     {
                         if (this.HasEditedOriginalInteraction)
                         {
-                            if (textMessage.MessageReference != null)
-                            {
-                                return await _channelAPI.CreateMessageAsync
-                                (
-                                    interactionContext.ChannelID,
-                                    textMessage.Content,
-                                    allowedMentions: textMessage.AllowedMentions ?? new AllowedMentions(new List<MentionType>(), new List<Snowflake>(), new List<Snowflake>()),
-                                    file: textMessage.FileData ?? new Optional<FileData>(),
-                                    messageReference: textMessage.MessageReference ?? new Optional<IMessageReference>(),
-                                    components: textMessage.MessageComponents ?? new Optional<IReadOnlyList<IMessageComponent>>(),
-                                    ct: ctx
-                                );
-                            }
-                            return await _webhookAPI.CreateFollowupMessageAsync
+                            return await _webhookApi.CreateFollowupMessageAsync
                             (
                                 interactionContext.ApplicationID,
                                 interactionContext.Token,
                                 textMessage.Content,
                                 allowedMentions: textMessage.AllowedMentions ?? new AllowedMentions(new List<MentionType>(), new List<Snowflake>(), new List<Snowflake>()),
-                                file: textMessage.FileData ?? new Optional<FileData>(),
                                 components: textMessage.MessageComponents ?? new Optional<IReadOnlyList<IMessageComponent>>(),
                                 ct: ctx
                             );
                         }
 
-                        if (textMessage.MessageReference != null || textMessage.FileData != null)
-                        {
-                            throw new InvalidOperationException(
-                                $"{nameof(textMessage.MessageReference)} and {nameof(textMessage.FileData)} cannot be defined on the original interaction response");
-                        }
-                        var edit = await _webhookAPI.EditOriginalInteractionResponseAsync
+                        var edit = await _webhookApi.EditOriginalInteractionResponseAsync
                         (
                             interactionContext.ApplicationID,
                             interactionContext.Token,
@@ -220,25 +251,22 @@ namespace Accord.Bot.Services
             }
         }
 
-        private IEnumerable<TextMessage> CreateTextContentChunks(TextMessage originalMessage)
+        private IEnumerable<(string Content, bool IsLast)> CreateTextContentChunks(string originalMessage, int chunkSize = 2000)
         {
-            if (originalMessage.Content.Length <= 2000)
+            if (originalMessage.Length <= chunkSize)
             {
-                yield return originalMessage;
+                yield return (originalMessage, true);
                 yield break;
             }
 
-            var words = originalMessage.Content.Split(' ');
+            var words = originalMessage.Split(' ');
             var messageBuilder = new StringBuilder();
             var index = 1;
             foreach (var word in words)
             {
-                if (messageBuilder.Length + word.Length >= 2000)
+                if (messageBuilder.Length + word.Length >= chunkSize)
                 {
-                    yield return index == words.Length
-                        ? originalMessage with { Content = messageBuilder.ToString().Trim() }
-                        : (TextMessage)messageBuilder.ToString().Trim();
-
+                    yield return (messageBuilder.ToString().Trim(), index == words.Length);
                     messageBuilder.Clear();
                 }
 
@@ -248,7 +276,7 @@ namespace Accord.Bot.Services
             }
 
             if (messageBuilder.Length > 0)
-                yield return originalMessage with { Content = messageBuilder.ToString().Trim() };
+                yield return (messageBuilder.ToString().Trim(), true);
         }
     }
 }

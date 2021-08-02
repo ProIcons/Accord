@@ -5,12 +5,16 @@ using Accord.Bot.CommandGroups.UserReports;
 using Accord.Bot.Helpers;
 using Accord.Bot.Helpers.Permissions;
 using Accord.Bot.Parsers;
+using Accord.Bot.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Remora.Commands.Extensions;
 using Remora.Discord.API.Abstractions.Gateway.Commands;
+using Remora.Discord.Commands.Extensions;
+using Remora.Discord.Commands.Responders;
 using Remora.Discord.Gateway;
 using Remora.Discord.Gateway.Extensions;
+using CommandResponder = Accord.Bot.Helpers.CommandResponder;
 
 namespace Accord.Bot.Infrastructure
 {
@@ -26,13 +30,14 @@ namespace Accord.Bot.Infrastructure
                 .Configure<DiscordConfiguration>(discordConfigurationSection);
 
             services
-                .Configure<DiscordCommandResponderOptions>(o => o.Prefix = "!");
+                .Configure<CommandResponderOptions>(o => o.Prefix = "!");
             
             services
                 .AddLogging()
                 .AddTransient<BotClient>()
                 .AddSingleton<BotState>()
                 .AddSingleton<DiscordCache>()
+                .AddScoped<UserFeedbackService>()
                 .AddScoped<DiscordAvatarHelper>()
                 .AddScoped<DiscordPermissionHelper>()
                 .AddScoped<DiscordScopedCache>()
@@ -48,6 +53,7 @@ namespace Accord.Bot.Infrastructure
                 })
                 .AddHostedService<RemindersHostedService>()
                 .AddDiscordCommands(true)
+                .AddExecutionEvent<CommandExecutionEventRespondHandler>()
                 .AddParser<TimeSpan, TimeSpanParser>()
                 .AddCommandGroup<XpCommandGroup>()
                 .AddCommandGroup<ChannelFlagCommandGroup>()

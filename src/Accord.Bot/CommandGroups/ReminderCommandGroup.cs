@@ -1,10 +1,13 @@
 ﻿using System;
 using System.ComponentModel;
+using System.Drawing;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Accord.Bot.Extensions;
 using Accord.Bot.Helpers;
+using Accord.Bot.Models;
+using Accord.Bot.Services;
 using Accord.Domain.Model;
 using Accord.Services.Helpers;
 using Accord.Services.Reminder;
@@ -24,113 +27,103 @@ using Remora.Results;
 namespace Accord.Bot.CommandGroups
 {
     [Group("remind")]
-    public class ReminderCommandGroup: AccordCommandGroup
+    public class ReminderCommandGroup : AccordCommandGroup
     {
         private readonly ICommandContext _commandContext;
         private readonly IMediator _mediator;
         private readonly IDiscordRestGuildAPI _guildApi;
         private readonly DiscordAvatarHelper _discordAvatarHelper;
-        private readonly CommandResponder _commandResponder;
+        private readonly UserFeedbackService _userFeedbackService;
 
         public ReminderCommandGroup(ICommandContext commandContext,
             IMediator mediator,
             IDiscordRestGuildAPI guildApi,
-            CommandResponder commandResponder,
+            UserFeedbackService userFeedbackService,
             DiscordAvatarHelper discordAvatarHelper)
         {
             _commandContext = commandContext;
             _mediator = mediator;
             _guildApi = guildApi;
-            _commandResponder = commandResponder;
+            _userFeedbackService = userFeedbackService;
             _discordAvatarHelper = discordAvatarHelper;
         }
 
         [Command("me"), Description("Add a reminder for the invoking user.")]
-        public async Task<IResult> AddReminder(TimeSpan timeSpan, string message)
+        public async Task<Result<IUserMessage>> AddReminder(TimeSpan timeSpan, string message)
         {
             var sanitizedMessage = message.DiscordSanitize();
 
-            var response = await _mediator.Send(new AddReminderRequest(
-                _commandContext.User.ID.Value,
-                _commandContext.ChannelID.Value,
-                timeSpan,
-                sanitizedMessage
-            ));
+            var response = await _mediator.Send(
+                new AddReminderRequest(
+                    _commandContext.User.ID.Value,
+                    _commandContext.ChannelID.Value,
+                    timeSpan,
+                    sanitizedMessage),
+                CancellationToken);
 
-            await response.GetAction(
-                async () => await _commandResponder.Respond($"You will be reminded about it in {timeSpan.Humanize()}"),
-                async () => await _commandResponder.Respond(response.ErrorMessage)
-            );
 
-            return Result.FromSuccess();
+            return response.Success
+                ? new StateMessage($"You will be reminded about it in {timeSpan.Humanize()}", Color.DarkGreen)
+                : Result<IUserMessage>.FromError(new GenericError(response.ErrorMessage));
         }
 
         [Command("list"), Description("List the reminders of the invoking user.")]
-        public async Task<IResult> ListUserReminders(int page = 1)
+        public async Task<Result<IUserMessage>> ListUserReminders(int page = 1)
         {
             var embed = await GetUserReminders(_commandContext.User.ID, page - 1);
 
-            await _commandResponder.Respond(embed);
-
-            return Result.FromSuccess();
+            return new EmbedMessage(embed);
         }
 
         [RequireUserGuildPermission(DiscordPermission.Administrator), Command("list-user"),
          Description("List the reminders of the specified user.")]
-        public async Task<IResult> ListUserReminders(IGuildMember member, int page = 1)
+        public async Task<Result<IUserMessage>> ListUserReminders(IGuildMember member, int page = 1)
         {
             var embed = await GetUserReminders(member.User.Value!.ID, page - 1);
-
-            await _commandResponder.Respond(embed);
-
-            return Result.FromSuccess();
+            return new EmbedMessage(embed);
         }
 
 
         [Command("delete"), Description("Deletes the reminder of the invoking user.")]
-        public async Task<IResult> DeleteReminder(int reminderId)
+        public async Task<Result<IUserMessage>> DeleteReminder(int reminderId)
         {
             var response = await _mediator.Send(new DeleteReminderRequest(_commandContext.User.ID.Value, reminderId));
 
-            await response.GetAction(async () => await _commandResponder.Respond($"Your reminder has been deleted."),
-                async () => await _commandResponder.Respond(response.ErrorMessage));
-
-            return Result.FromSuccess();
+            return response.Success
+                ? new InfoMessage("Your reminder has been Deleted")
+                : new ErrorMessage(response.ErrorMessage);
         }
 
         [Command("delete-user"), RequireUserGuildPermission(DiscordPermission.Administrator),
          Description("Deletes a reminder of the specified user.")]
-        public async Task<IResult> DeleteReminder(IGuildMember guildMember, int reminderId)
+        public async Task<Result<IUserMessage>> DeleteReminder(IGuildMember guildMember, int reminderId)
         {
             var response = await _mediator.Send(new DeleteReminderRequest(guildMember.User.Value!.ID.Value, reminderId));
 
-            await response.GetAction(async () => await _commandResponder.Respond($"{guildMember.User.Value.Username}'s reminder has been deleted."),
-                async () => await _commandResponder.Respond(response.ErrorMessage));
-
-            return Result.FromSuccess();
+            return response.Success
+                ? new InfoMessage($"{guildMember.User.Value.Username}'s reminder has been deleted.")
+                : new ErrorMessage(response.ErrorMessage);
         }
 
         [Command("delete-all"), Description("Deletes all the reminders of the invoking user.")]
-        public async Task<IResult> DeleteAllReminders()
+        public async Task<Result<IUserMessage>> DeleteAllReminders()
         {
             var response = await _mediator.Send(new DeleteAllRemindersRequest(_commandContext.User.ID.Value));
-
-            await response.GetAction(async () => await _commandResponder.Respond($"Your reminders have been deleted."),
-                async () => await _commandResponder.Respond(response.ErrorMessage));
-
-            return Result.FromSuccess();
+            
+            return response.Success
+                ? new InfoMessage("Your reminders have been deleted.")
+                : new ErrorMessage(response.ErrorMessage);
         }
 
         [Command("delete-user-all"), RequireUserGuildPermission(DiscordPermission.Administrator),
          Description("Deletes all the reminders of the specified user.")]
-        public async Task<IResult> DeleteAllReminders(IGuildMember guildMember)
+        public async Task<Result<IUserMessage>> DeleteAllReminders(IGuildMember guildMember)
         {
             var response = await _mediator.Send(new DeleteAllRemindersRequest(guildMember.User.Value!.ID.Value));
-
-            await response.GetAction(async () => await _commandResponder.Respond($"{guildMember.User.Value.Username}'s reminders has been deleted."),
-                async () => await _commandResponder.Respond(response.ErrorMessage));
-
-            return Result.FromSuccess();
+            
+            return response.Success
+                ? new InfoMessage($"{guildMember.User.Value.Username}'s reminders has been deleted.")
+                : new ErrorMessage(response.ErrorMessage);
         }
 
         private async Task<Embed> GetUserReminders(Snowflake id, int page = 0)

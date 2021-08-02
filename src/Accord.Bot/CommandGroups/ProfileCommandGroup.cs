@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Accord.Bot.Extensions;
 using Accord.Bot.Helpers;
+using Accord.Bot.Models;
 using Accord.Services.Helpers;
 using Accord.Services.Users;
 using Humanizer;
@@ -40,7 +41,7 @@ namespace Accord.Bot.CommandGroups
         }
 
         [Command("profile"), Description("Get your profile")]
-        public async Task<IResult> GetProfile(IGuildMember? member = null)
+        public async Task<Result<IUserMessage>> GetProfile(IGuildMember? member = null)
         {
             if (member is not null && !member.User.HasValue)
             {
@@ -53,18 +54,12 @@ namespace Accord.Bot.CommandGroups
             var response = await _mediator.Send(new GetUserRequest(userId));
 
             if (!response.Success)
-            {
-                await _commandResponder.Respond(response.ErrorMessage);
-                return Result.FromSuccess();
-            }
+                return Result<IUserMessage>.FromError(new InvalidOperationError(response.ErrorMessage));
 
             var guildUserEntity = await _guildApi.GetGuildMemberAsync(_commandContext.GuildID.Value, new Snowflake(userId));
 
             if (!guildUserEntity.IsSuccess || guildUserEntity.Entity is null || !guildUserEntity.Entity.User.HasValue)
-            {
-                await _commandResponder.Respond("Couldn't find user in Guild");
-                return Result.FromSuccess();
-            }
+                return Result<IUserMessage>.FromError(new InvalidOperationError("Couldn't find user in Guild"));
 
             var guildUser = guildUserEntity.Entity;
             var (userDto, userMessagesInChannelDtos, userVoiceMinutesInChannelDtos) = response.Value!;
@@ -143,9 +138,7 @@ namespace Accord.Bot.CommandGroups
                 Thumbnail: avatarImage,
                 Description: builder.ToString());
 
-            await _commandResponder.Respond(embed);
-
-            return Result.FromSuccess();
+            return new EmbedMessage(embed);
         }
     }
 }
